@@ -1,26 +1,9 @@
 import os
 import datetime
-import multiprocessing
-from flask import Flask
 import discord
 import yfinance as yf
 import pandas as pd
 from finmind.data import DataLoader
-
-# ================= 網頁伺服器設定 =================
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "🤖 全功能股市查價機器人正在雲端線上安全運作中！"
-
-def run_flask_process(port):
-    """在完全獨立的進程中執行 Flask，避開 Python 3.14 的異步相容性問題"""
-    from werkzeug.serving import make_server
-    print(f"🤖 網頁偽裝伺服器正在獨立進程中啟動 (Port: {port})...")
-    server = make_server('0.0.0.0', port, app)
-    server.serve_forever()
-# ====================================================================================
 
 # 1. 設定 intents 權限
 intents = discord.Intents.default()
@@ -203,14 +186,8 @@ async def on_message(message):
 # 4. 啟動機器人
 if __name__ == "__main__":
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-    port_num = int(os.getenv("PORT", 8080))
     
     if DISCORD_BOT_TOKEN:
-        # 💡 使用 multiprocessing (獨立多進程) 啟動 Flask，完美防禦環境相容性衝突
-        flask_process = multiprocessing.Process(target=run_flask_process, args=(port_num,))
-        flask_process.daemon = True
-        flask_process.start()
-        
         print("🤖 正在連線至 Discord 伺服器...")
         client.run(DISCORD_BOT_TOKEN)
     else:
