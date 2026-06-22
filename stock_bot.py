@@ -13,10 +13,9 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is alive and running!"
+    return "🤖 股市技術、基本面、籌碼面與新聞機器人正在雲端安全運作中！"
 
 def run_flask():
-    # Render 會自動注入 PORT 環境變數，若無則預設 8080
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -25,13 +24,28 @@ threading.Thread(target=run_flask, daemon=True).start()
 print("🚀 Flask 網頁監聽服務已在背景啟動")
 
 
-# ==================== 2. 籌碼面：FinMind API 抓取函式 ====================
+# ==================== 2. 股票名稱對應表 (還原你原本的功能) ====================
+STOCK_MAPPING = {
+    "台積電": "2330.TW", "聯發科": "2454.TW", "鴻海": "2317.TW",
+    "世芯": "3661.TW", "世芯-KY": "3661.TW", "信驊": "5274.TWO",
+    "臻鼎": "4958.TW", "費半": "SOXX", "SOXX": "SOXX"
+}
+
+def get_stock_ticker(user_input):
+    if user_input in STOCK_MAPPING:
+        return STOCK_MAPPING[user_input]
+    if user_input.isdigit():
+        return f"{user_input}.TW"
+    return user_input
+
+
+# ==================== 3. 籌碼面：FinMind API 抓取函式 ====================
 def get_taiwan_chips(stock_id):
     """
     透過 FinMind 免費 API 取得最新交易日的三大法人買賣超資料 (單位：張)
     """
     try:
-        # 移除 yfinance 可能帶有的 .TW 或 .TWO 尾綴，FinMind 只需要純數字 (如 4958)
+        # 移除 yfinance 的 .TW 或 .TWO 尾綴，FinMind 只需要純數字 (如 4958)
         clean_id = stock_id.split('.')[0]
         url = "https://api.finmindtrade.com/api/v4/data"
         
@@ -49,7 +63,6 @@ def get_taiwan_chips(stock_id):
         
         if res_key.get("status") == 200 and res_key.get("data"):
             df_chips = pd.DataFrame(res_key["data"])
-            # 依日期排序
             df_chips = df_chips.sort_values(by="date")
             
             # 取得最新的那一天交易日
@@ -58,7 +71,6 @@ def get_taiwan_chips(stock_id):
             
             chips_summary = {"date": latest_date, "外資": 0, "投信": 0, "自營商": 0}
             
-            # 名稱映射字典
             name_map = {
                 "Foreign_Investor": "外資",
                 "Investment_Trust": "投信",
@@ -67,15 +79,13 @@ def get_taiwan_chips(stock_id):
                 "Dealer_Hedging": "自營商"
             }
             
-            # 統計各大法人買賣超 (買進股數 - 賣出股數)
             for _, row in latest_data.iterrows():
                 eng_name = row.get("name")
                 chi_name = name_map.get(eng_name, None)
                 
                 if chi_name:
                     net_shares = int(row.get("buy", 0)) - int(row.get("sell", 0))
-                    # FinMind 回傳為「股數」，除以 1000 換算為「張數」，取小數點後1位
-                    net_lots = round(net_shares / 1000, 1)
+                    net_lots = round(net_shares / 1000, 1)  # 換算為張數
                     chips_summary[chi_name] += net_lots
             
             return chips_summary
@@ -84,17 +94,15 @@ def get_taiwan_chips(stock_id):
     return None
 
 
-# ==================== 3. Discord 機器人主程式 ====================
-# 讀取環境變數
+# ==================== 4. Discord 機器人主程式 ====================
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 if not DISCORD_BOT_TOKEN or DISCORD_BOT_TOKEN.strip() == "":
     print("❌ 【錯誤】找不到環境變數 DISCORD_BOT_TOKEN，程式終止！")
     sys.exit(1)
 
-# 設定 Discord 意圖 (Intents)
 intents = discord.Intents.default()
-intents.message_content = True  # 允許機器人讀取對話訊息
+intents.message_content = True  
 client = discord.Client(intents=intents)
 
 @client.event
@@ -103,44 +111,33 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # 排除機器人自身的訊息，避免無限循環
     if message.author == client.user:
         return
 
-    # 觸發指令設定為： !stock 股票代號 (例如: !stock 4958)
-    if message.content.startswith("!stock "):
+    # 還原你原本的 !查價 指令 (後面加空格)
+    if message.content.startswith('!查價 '):
         try:
-            # 解析使用者輸入的代號
-            parts = message.content.split(" ")
-            if len(parts) < 2:
-                await message.channel.send("⚠️ 請輸入正確格式，例如：`!stock 4958`")
-                return
-                
-            query = parts[1].strip()
+            query = message.content.replace('!查價 ', '').strip()
             
-            # 自動補上台股尾綴 (預設先查上市 .TW)
-            if not query.endswith((".TW", ".TWO")):
-                stock_code = f"{query}.TW"
-            else:
-                stock_code = query
+            # 轉換代號 (例如：台積電 -> 2330.TW；4958 -> 4958.TW)
+            ticker = get_stock_ticker(query)
+            
+            await message.channel.send(f"🔍 正在為您全面分析 `{query}` 的技術面、基本面、籌碼面與最新新聞，請稍候...")
 
-            await message.channel.send(f"🔍 正在努力分析 `{stock_code}` 中，請稍候...")
-
-            # 抓取技術面、基本面資料
-            stock = yf.Ticker(stock_code)
+            stock = yf.Ticker(ticker)
             data = stock.history(period="3mo")
 
-            # 如果上市查無資料，嘗試改成上櫃 (.TWO) 再查一次
-            if data.empty and not query.endswith(".TWO"):
-                stock_code = f"{query}.TWO"
-                stock = yf.Ticker(stock_code)
+            # 如果輸入純數字查不到上市，嘗試改成上櫃 (.TWO) 再查一次
+            if data.empty and query.isdigit():
+                ticker = f"{query}.TWO"
+                stock = yf.Ticker(ticker)
                 data = stock.history(period="3mo")
 
             if data.empty:
-                await message.channel.send(f"❌ 找不到 `{query}` 的股市資料，請確認代號是否正確。")
+                await message.channel.send(f"❌ 找不到 `{query}` 的資料，請確認名稱或代號是否正確。")
                 return
 
-            # 🔥 【核心修復】剔除尚未開盤、Close為 NaN 的空白列，防止夜間/週末查價時均線變 nan
+            # 🔥 【防 nan 機制】剔除尚未開盤、Close 為 NaN 的空白列
             data = data.dropna(subset=['Close'])
             if data.empty:
                 await message.channel.send("❌ 該股票近期無有效交易數據。")
@@ -150,21 +147,18 @@ async def on_message(message):
             data['5MA'] = data['Close'].rolling(window=5).mean()
             data['20MA'] = data['Close'].rolling(window=20).mean()
 
-            # 計算 14日 RSI
             delta = data['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             data['RSI'] = 100 - (100 / (1 + rs))
 
-            # 取出最新一筆有效交易日的數據
             latest = data.iloc[-1]
             close_val = round(latest['Close'], 2)
             ma5_val = round(latest['5MA'], 2)
             ma20_val = round(latest['20MA'], 2)
             rsi_val = round(latest['RSI'], 1) if not pd.isna(latest['RSI']) else "計算中"
 
-            # 趨勢判斷
             trend = "📈 短期趨勢偏多 (5MA > 20MA)" if ma5_val > ma20_val else "📉 短期趨勢偏空 (5MA < 20MA)"
 
             # ---------------- 🏢 基本面數據 ----------------
@@ -181,8 +175,8 @@ async def on_message(message):
             else:
                 yield_rate = "無"
 
-            # ---------------- 👥 籌碼面數據 ----------------
-            chips = get_taiwan_chips(query)
+            # ---------------- 👥 籌碼面數據 (三大法人) ----------------
+            chips = get_taiwan_chips(ticker)
             if chips:
                 def format_chip(val):
                     if val > 0: return f"🟢 買超 +{val} 張"
@@ -196,11 +190,27 @@ async def on_message(message):
                     f" • 自營商：`{format_chip(chips['自營商'])}`"
                 )
             else:
-                chips_text = "⚠️ 暫時無法取得該股籌碼面數據"
+                chips_text = "⚠️ 暫時無法取得該股籌碼面數據 (美股或無資料)"
+
+            # ---------------- 📰 最新重大新聞 (補回原本的功能) ----------------
+            news_text = "暫無相關新聞資訊。"
+            try:
+                news_list = stock.news
+                if news_list:
+                    news_lines = []
+                    for item in news_list[:3]:  # 顯示最新 3 則新聞
+                        title = item.get('title', '未知標題')
+                        link = item.get('link', '#')
+                        if len(title) > 28:
+                            title = title[:28] + "..."
+                        news_lines.append(f"• [{title}]({link})")
+                    news_text = "\n".join(news_lines)
+            except Exception:
+                news_text = "⚠️ 無法取得即時新聞。"
 
             # ---------------- ✉️ 組裝並發送綜合報告 ----------------
             report = f"""
-📋 **{stock_code} 綜合分析報告**
+📋 **{ticker} 綜合分析報告**
 當前狀態：{trend}
 
 **【技術面指標】**
@@ -216,6 +226,9 @@ async def on_message(message):
 
 **【籌碼面數據 (三大法人)】**
 {chips_text}
+
+**【最新重大消息】**
+{news_text}
 
 *數據僅供參考，投資請謹慎評估。*
             """
