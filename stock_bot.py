@@ -1,23 +1,29 @@
 import os
-import threading
+import asyncio
 import datetime
 from flask import Flask
 import discord
+from discord.ext import tasks
 import yfinance as yf
 import pandas as pd
-from FinMind.data import DataLoader
+from finmind.data import DataLoader
 
-# ================= 網頁伺服器設定（解決 Render Web Service 部署問題） =================
+# ================= 網頁伺服器設定 =================
 app = Flask('')
 
 @app.route('/')
 def home():
     return "🤖 全功能股市查價機器人正在雲端線上安全運作中！"
 
-def run_web_server():
+# 使用非阻塞的 asyncio 方式在背景啟動網頁，徹底解決 Python 3.14 的異步迴圈衝突
+async def start_flask():
+    from werkzeug.serving import make_server
     port = int(os.getenv("PORT", 8080))
-    # 關鍵修正：單獨啟動 Flask 時，關閉 reloader 與 debug 模式，避免產生多重執行緒衝突
-    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    server = make_server('0.0.0.0', port, app)
+    
+    # 讓 Flask 伺服器在 Discord 的事件迴圈中以非阻塞異步方式跑起來
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, server.serve_forever)
 # ====================================================================================
 
 # 1. 設定 intents 權限
@@ -40,10 +46,19 @@ def get_stock_ticker(user_input):
 # 2. 建立機器人實例
 client = discord.Client(intents=intents)
 
+# 💡 核心優化：利用 discord.ext.tasks 在機器人準備啟動時，自動把網頁伺服器帶起來
+@tasks.loop(count=1)
+async def background_web_server():
+    print("🤖 網頁偽裝伺服器已在背景以異步模式安全啟動...")
+    await start_flask()
+
 @client.event
 async def on_ready():
     print(f'✨ 機器人已經登入成功，目前身分是: {client.user} ✨')
     print("👉 已經可以在 Discord 頻道輸入 '!查價 股票名稱' 來呼叫機器人！")
+    # 機器人上線後，自動啟動網頁任務
+    if not background_web_server.is_running():
+        background_web_server.start()
 
 @client.event
 async def on_message(message):
@@ -58,7 +73,10 @@ async def on_message(message):
         ticker = get_stock_ticker(query)
         stock = yf.Ticker(ticker)
         
-        data = stock.history(period="3mo")
+        try:
+            data = stock.history(period="3mo")
+        except Exception:
+            data = pd.DataFrame()
         
         if data.empty:
             await message.channel.send(f"❌ 找不到 `{query}` 的資料，請確認名稱或代號是否正確。")
@@ -197,16 +215,9 @@ async def on_message(message):
 
 # 4. 啟動機器人
 if __name__ == "__main__":
-    # 💡 終極修正：先在主執行緒讀取環境變數，確保密碼有拿到
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
     
     if DISCORD_BOT_TOKEN:
-        # 將網頁伺服器丟到獨立背景執行緒
-        t = threading.Thread(target=run_web_server)
-        t.daemon = True
-        t.start()
-        
-        print("🤖 網頁偽裝伺服器已在背景啟動...")
         print("🤖 正在連線至 Discord 伺服器...")
         client.run(DISCORD_BOT_TOKEN)
     else:
