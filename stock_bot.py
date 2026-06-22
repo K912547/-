@@ -1,4 +1,5 @@
 import os
+import sys
 import datetime
 import multiprocessing
 from flask import Flask
@@ -139,7 +140,7 @@ async def on_message(message):
                 title=f"📊 {ticker} 綜合分析報告",
                 description=f"**🔥 當前狀態：** `{status_text}`",
                 color=embed_color,
-                timestamp=datetime.datetime.utcnow()
+                timestamp=datetime.datetime.now(datetime.timezone.utc)
             )
             
             tech_field = f"**💵 最新收盤：** `{latest_price}`\n" \
@@ -163,12 +164,23 @@ async def on_message(message):
             print(f"查詢時發生錯誤: {e}")
             await message.channel.send(f"⚠️ 查詢過程中發生未知錯誤，請稍後再試。")
 
+# ================= 🚀 修正與優化後的啟動區塊 =================
 if __name__ == "__main__":
+    # 1. 優先檢查 Token，防範空字串、None 或是只有空格的無效 Token
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    
+    if not DISCORD_BOT_TOKEN or DISCORD_BOT_TOKEN.strip() == "":
+        print("❌ 【錯誤】找不到環境變數 DISCORD_BOT_TOKEN，或 Token 為空值！", file=sys.stderr)
+        print("請至 Render 控制台的 'Environment' 設定正確的 Token 後再重新部署。", file=sys.stderr)
+        sys.exit(1) # 中斷程式，避免無效啟動
+        
+    # 2. Token 有通過基本檢查，再啟動 Flask 背景服務綁定 Port
     port = int(os.getenv("PORT", 8080))
     flask_process = multiprocessing.Process(target=run_flask_process, args=(port,))
     flask_process.daemon = True
     flask_process.start()
+    print(f"🚀 Flask 網頁監聽服務已在背景啟動 (Port: {port})")
     
-    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-    if DISCORD_BOT_TOKEN:
-        client.run(DISCORD_BOT_TOKEN)
+    # 3. 正式連線 Discord
+    print("🤖 正在嘗試連線至 Discord...")
+    client.run(DISCORD_BOT_TOKEN)
