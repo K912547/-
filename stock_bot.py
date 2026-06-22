@@ -1,13 +1,26 @@
+import os
+import threading
+from flask import Flask  # 引入輕量網頁套件，供 Render 順利開機用
 import discord
 import yfinance as yf
 import pandas as pd
 
+# ================= 網頁伺服器設定（解決 Render Web Service 部署問題） =================
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "🤖 股市查價機器人正在雲端線上安全運作中！"
+
+def run_web_server():
+    # Render 會自動動態分配 PORT，若無則預設為 8080
+    port = int(os.getenv("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+# ====================================================================================
+
 # 1. 設定 intents 權限
 intents = discord.Intents.default()
 intents.message_content = True  # 開啟讀取訊息內容權限
-
-# 2. 填入你的 Discord Bot Token (請務必將引號內的文字換成你的 Token)
-DISCORD_BOT_TOKEN = 'MTUxODI0MTQ4MTAyMDgwNTE5MQ.G6--0K.1cB-HSVMx82YZeLwFnrvSpKvd9xl5OjDcDZiUM'
 
 STOCK_MAPPING = {
     "台積電": "2330.TW", "聯發科": "2454.TW", "鴻海": "2317.TW",
@@ -84,4 +97,15 @@ async def on_message(message):
         await message.channel.send(reply_msg)
 
 # 4. 啟動機器人
-client.run(DISCORD_BOT_TOKEN)
+if __name__ == "__main__":
+    # 在背景先將虛擬網頁伺服器吵醒，防止 Render 因偵測不到 Port 而部署失敗
+    t = threading.Thread(target=run_web_server)
+    t.start()
+    
+    # 🔐 安全作法：從 Render 環境變數中讀取密碼
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    
+    if DISCORD_BOT_TOKEN:
+        client.run(DISCORD_BOT_TOKEN)
+    else:
+        print("❌ 錯誤：找不到 DISCORD_BOT_TOKEN 環境變數，請檢查 Render 後台設定！")
