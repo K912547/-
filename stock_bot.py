@@ -16,8 +16,8 @@ def home():
 
 def run_web_server():
     port = int(os.getenv("PORT", 8080))
-    # 加上 use_reloader=False 防止在背景重複開機卡死
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
+    # 關鍵修正：單獨啟動 Flask 時，關閉 reloader 與 debug 模式，避免產生多重執行緒衝突
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 # ====================================================================================
 
 # 1. 設定 intents 權限
@@ -197,13 +197,16 @@ async def on_message(message):
 
 # 4. 啟動機器人
 if __name__ == "__main__":
-    # 💡 關鍵修正：將 daemon 設為 True，讓網頁在完全不干擾主程式的狀態下獨立在背景跑
-    t = threading.Thread(target=run_web_server, daemon=True)
-    t.start()
-    
+    # 💡 終極修正：先在主執行緒讀取環境變數，確保密碼有拿到
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
     
     if DISCORD_BOT_TOKEN:
+        # 將網頁伺服器丟到獨立背景執行緒
+        t = threading.Thread(target=run_web_server)
+        t.daemon = True
+        t.start()
+        
+        print("🤖 網頁偽裝伺服器已在背景啟動...")
         print("🤖 正在連線至 Discord 伺服器...")
         client.run(DISCORD_BOT_TOKEN)
     else:
