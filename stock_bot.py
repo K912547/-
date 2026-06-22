@@ -122,4 +122,53 @@ async def on_message(message):
             news_text = "暫無相關新聞資訊。"
             try:
                 news_list = stock.news
-                if news_
+                if news_list:
+                    news_lines = []
+                    for item in news_list[:3]:
+                        title = item.get('title', '未知標題')
+                        link = item.get('link', '#')
+                        if len(title) > 28:
+                            title = title[:28] + "..."
+                        news_lines.append(f"• [{title}]({link})")
+                    news_text = "\n".join(news_lines)
+            except Exception:
+                news_text = "⚠️ 無法取得即時新聞。"
+
+            # ---------------- 🎨 製作 Discord Embed 字卡 ----------------
+            embed = discord.Embed(
+                title=f"📊 {ticker} 綜合分析報告",
+                description=f"**🔥 當前狀態：** `{status_text}`",
+                color=embed_color,
+                timestamp=datetime.datetime.utcnow()
+            )
+            
+            tech_field = f"**💵 最新收盤：** `{latest_price}`\n" \
+                         f"**🔹 5MA 均線：** `{ma5}`\n" \
+                         f"**🔸 20MA 均線：** `{ma20}`\n" \
+                         f"**⚡ 14日 RSI：** `{rsi14}`\n" \
+                         f"**📊 成交量能：** `{vol_ratio} 倍` (相較5日均量)"
+            embed.add_field(name="📈 技術面指標", value=tech_field, inline=False)
+            
+            fund_field = f"**🎯 本益比 (PE)：** `{pe_ratio} 倍`\n" \
+                         f"**💰 每股盈餘 (EPS)：** `${eps}`\n" \
+                         f"**💎 現金殖利率：** `{div_yield}`"
+            embed.add_field(name="💎 基本面數據", value=fund_field, inline=False)
+            
+            embed.add_field(name="📰 最新重大消息", value=news_text, inline=False)
+            embed.set_footer(text="數據僅供參考，投資請謹慎評估")
+            
+            await message.channel.send(embed=embed)
+
+        except Exception as e:
+            print(f"查詢時發生錯誤: {e}")
+            await message.channel.send(f"⚠️ 查詢過程中發生未知錯誤，請稍後再試。")
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 8080))
+    flask_process = multiprocessing.Process(target=run_flask_process, args=(port,))
+    flask_process.daemon = True
+    flask_process.start()
+    
+    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    if DISCORD_BOT_TOKEN:
+        client.run(DISCORD_BOT_TOKEN)
