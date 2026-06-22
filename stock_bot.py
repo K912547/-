@@ -1,9 +1,8 @@
 import os
-import asyncio
 import datetime
+import multiprocessing
 from flask import Flask
 import discord
-from discord.ext import tasks
 import yfinance as yf
 import pandas as pd
 from finmind.data import DataLoader
@@ -15,15 +14,12 @@ app = Flask('')
 def home():
     return "🤖 全功能股市查價機器人正在雲端線上安全運作中！"
 
-# 使用非阻塞的 asyncio 方式在背景啟動網頁，徹底解決 Python 3.14 的異步迴圈衝突
-async def start_flask():
+def run_flask_process(port):
+    """在完全獨立的進程中執行 Flask，避開 Python 3.14 的異步相容性問題"""
     from werkzeug.serving import make_server
-    port = int(os.getenv("PORT", 8080))
+    print(f"🤖 網頁偽裝伺服器正在獨立進程中啟動 (Port: {port})...")
     server = make_server('0.0.0.0', port, app)
-    
-    # 讓 Flask 伺服器在 Discord 的事件迴圈中以非阻塞異步方式跑起來
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, server.serve_forever)
+    server.serve_forever()
 # ====================================================================================
 
 # 1. 設定 intents 權限
@@ -46,19 +42,10 @@ def get_stock_ticker(user_input):
 # 2. 建立機器人實例
 client = discord.Client(intents=intents)
 
-# 💡 核心優化：利用 discord.ext.tasks 在機器人準備啟動時，自動把網頁伺服器帶起來
-@tasks.loop(count=1)
-async def background_web_server():
-    print("🤖 網頁偽裝伺服器已在背景以異步模式安全啟動...")
-    await start_flask()
-
 @client.event
 async def on_ready():
     print(f'✨ 機器人已經登入成功，目前身分是: {client.user} ✨')
     print("👉 已經可以在 Discord 頻道輸入 '!查價 股票名稱' 來呼叫機器人！")
-    # 機器人上線後，自動啟動網頁任務
-    if not background_web_server.is_running():
-        background_web_server.start()
 
 @client.event
 async def on_message(message):
@@ -216,8 +203,14 @@ async def on_message(message):
 # 4. 啟動機器人
 if __name__ == "__main__":
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+    port_num = int(os.getenv("PORT", 8080))
     
     if DISCORD_BOT_TOKEN:
+        # 💡 使用 multiprocessing (獨立多進程) 啟動 Flask，完美防禦環境相容性衝突
+        flask_process = multiprocessing.Process(target=run_flask_process, args=(port_num,))
+        flask_process.daemon = True
+        flask_process.start()
+        
         print("🤖 正在連線至 Discord 伺服器...")
         client.run(DISCORD_BOT_TOKEN)
     else:
