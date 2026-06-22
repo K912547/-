@@ -183,7 +183,7 @@ async def on_message(message):
             title=f"📊 {ticker} 綜合分析報告",
             description=f"**🔥 當前狀態：** `{status_text}`",
             color=embed_color,
-            timestamp=datetime.datetime.utcnow()
+            timestamp=datetime.datetime.now(datetime.timezone.utc)
         )
         
         tech_field = f"**💵 最新收盤：** `{latest_price}`\n" \
