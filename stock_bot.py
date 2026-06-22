@@ -209,9 +209,11 @@ if __name__ == "__main__":
     t = threading.Thread(target=run_web_server)
     t.daemon = True
     t.start()
-    
-    DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
-    if DISCORD_BOT_TOKEN:
-        client.run(DISCORD_BOT_TOKEN)
-    else:
-        print("❌ 錯誤：找不到 DISCORD_BOT_TOKEN 環境變數，請檢查 Render 後台設定！")
+
+    DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+
+    if not DISCORD_BOT_TOKEN:
+        print("❌ 找不到 DISCORD_BOT_TOKEN")
+        exit(1)
+
+    client.run(DISCORD_BOT_TOKEN)
