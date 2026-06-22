@@ -1,19 +1,20 @@
 import os
 import threading
-from flask import Flask  # 引入輕量網頁套件，供 Render 順利開機用
+import datetime
+from flask import Flask
 import discord
 import yfinance as yf
 import pandas as pd
+from FinMind.data import DataLoader  # 引入籌碼面專用套件
 
 # ================= 網頁伺服器設定（解決 Render Web Service 部署問題） =================
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "🤖 股市查價機器人正在雲端線上安全運作中！"
+    return "🤖 全功能股市查價機器人正在雲端線上安全運作中！"
 
 def run_web_server():
-    # Render 會自動動態分配 PORT，若無則預設為 8080
     port = int(os.getenv("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 # ====================================================================================
@@ -32,50 +33,63 @@ def get_stock_ticker(user_input):
     if user_input in STOCK_MAPPING:
         return STOCK_MAPPING[user_input]
     if user_input.isdigit():
+        # 預設四碼數字為台股上市
         return f"{user_input}.TW"
     return user_input
 
-# 3. 建立機器人實例
+# 2. 建立機器人實例
 client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
     print(f'✨ 機器人已經登入成功，目前身分是: {client.user} ✨')
-    print("👉 已經可以在 Discord 頻道輸入 '!查價 股票名稱' 來呼叫機器人！")
 
 @client.event
 async def on_message(message):
-    # 避免機器人自己回自己，造成無限迴圈
     if message.author == client.user:
         return
 
-    # 觸發指令：只要在 Discord 輸入 "!查價 XXXXX" 就會觸發
     if message.content.startswith('!查價 '):
-        # 取得使用者輸入的名稱/代號（把 '!查價 ' 切掉）
         query = message.content.replace('!查價 ', '').strip()
         
-        # 提示處理中
-        await message.channel.send(f"🤖 正在為您查詢 `{query}` 的資料，請稍候...")
+        await message.channel.send(f"🔍 正在為您全面分析 `{query}` 的技術面、基本面、籌碼面與新聞，請稍候...")
         
         ticker = get_stock_ticker(query)
         stock = yf.Ticker(ticker)
-        data = stock.history(period="2mo")
+        
+        # 抓取 3 個月的數據以利計算 20MA 與 14RSI
+        data = stock.history(period="3mo")
         
         if data.empty:
             await message.channel.send(f"❌ 找不到 `{query}` 的資料，請確認名稱或代號是否正確。")
             return
             
+        # ---------------- 📊 技術面計算 ----------------
         data['5MA'] = data['Close'].rolling(window=5).mean()
         data['20MA'] = data['Close'].rolling(window=20).mean()
         
+        # 計算 14日 RSI
+        delta = data['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        data['RSI'] = 100 - (100 / (1 + rs))
+        
         if len(data) < 20:
-            await message.channel.send("⚠️ 歷史數據不足，無法計算均線。")
+            await message.channel.send("⚠️ 歷史數據不足，無法計算完整的技術指標。")
             return
 
         latest_price = round(data['Close'].iloc[-1], 2)
         ma5 = round(data['5MA'].iloc[-1], 2)
         ma20 = round(data['20MA'].iloc[-1], 2)
+        rsi14 = round(data['RSI'].iloc[-1], 1) if not pd.isna(data['RSI'].iloc[-1]) else "計算中"
         
+        # 量能分析 (今日成交量比前5日平均成交量)
+        avg_volume = data['Volume'].rolling(window=5).mean().iloc[-2]
+        current_volume = data['Volume'].iloc[-1]
+        vol_ratio = round(current_volume / avg_volume, 2) if avg_volume > 0 else 1.0
+        
+        # 判斷多空趨勢
         yesterday_5ma = data['5MA'].iloc[-2]
         yesterday_20ma = data['20MA'].iloc[-2]
         today_5ma = data['5MA'].iloc[-1]
@@ -83,26 +97,123 @@ async def on_message(message):
         
         is_golden_cross = (yesterday_5ma <= yesterday_20ma) and (today_5ma > today_20ma)
         
-        # 組裝回覆訊息
-        reply_msg = f"**【股市分析報告】**\n> **標的:** `{ticker}`\n> **收盤價:** `{latest_price}`\n> **5MA:** `{ma5}` | **20MA:** `{ma20}`\n"
-        
         if is_golden_cross:
-            reply_msg += "🔥 **狀態:** `發生黃金交叉！短均線突破長均線！` 🔥"
+            status_text = "🔥 發生黃金交叉！短均線突破長均線！"
+            embed_color = discord.Color.red()  # 紅色代表多頭訊號
         elif ma5 > ma20:
-            reply_msg += "📈 **狀態:** `短期趨勢偏多 (5MA > 20MA)`"
+            status_text = "📈 短期趨勢偏多 (5MA > 20MA)"
+            embed_color = discord.Color.orange()
         else:
-            reply_msg += "📉 **狀態:** `短期趨勢偏空 (5MA < 20MA)`"
-            
-        # 直接在頻道回覆
-        await message.channel.send(reply_msg)
+            status_text = "📉 短期趨勢偏空 (5MA < 20MA)"
+            embed_color = discord.Color.green()
+
+        # ---------------- 💎 基本面抓取 ----------------
+        try:
+            info = stock.info
+            pe_ratio = round(info.get('trailingPE', 0), 2) if info.get('trailingPE') else "無"
+            eps = round(info.get('trailingEps', 0), 2) if info.get('trailingEps') else "無"
+            yield_raw = info.get('dividendYield', 0)
+            div_yield = f"{round(yield_raw * 100, 2)}%" if yield_raw else "無"
+        except Exception:
+            pe_ratio, eps, div_yield = "暫無資料", "暫無資料", "暫無資料"
+
+        # ---------------- 👥 籌碼面抓取 (三大法人 - 僅限台股) ----------------
+        chip_text = "非台股標的，暫不提供三大法人籌碼。"
+        if ".TW" in ticker or ".TWO" in ticker:
+            try:
+                stock_id = ticker.split('.')[0]
+                fm_api = DataLoader()
+                # 抓取過去7天內的資料，確保能拿到最新的交易日
+                end_date = datetime.date.today().strftime('%Y-%m-%d')
+                start_date = (datetime.date.today() - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+                
+                chip_df = fm_api.taiwan_stock_institutional_investors(
+                    stock_id=stock_id, start_date=start_date, end_date=end_date
+                )
+                
+                if not chip_df.empty:
+                    # 取得最新一天的籌碼日期
+                    latest_chip_date = chip_df['date'].max()
+                    day_chip = chip_df[chip_df['date'] == latest_chip_date]
+                    
+                    foreign = day_chip[day_chip['name'].str.contains('外資|陸資', na=False)]
+                    trust = day_chip[day_chip['name'].str.contains('投信', na=False)]
+                    dealer = day_chip[day_chip['name'].str.contains('自營商', na=False)]
+                    
+                    f_net = int(foreign['buy'].sum() - foreign['sell'].sum()) // 1000 if not foreign.empty else 0
+                    t_net = int(trust['buy'].sum() - trust['sell'].sum()) // 1000 if not trust.empty else 0
+                    d_net = int(dealer['buy'].sum() - dealer['sell'].sum()) // 1000 if not dealer.empty else 0
+                    
+                    def fmt_chip(val):
+                        if val > 0: return f"🟢 買超 +{val} 張"
+                        elif val < 0: return f"🔴 賣超 {val} 張"
+                        return "⚪ ❌無買賣超"
+
+                    chip_text = f"📅 數據日期：`{latest_chip_date}`\n" \
+                                f"👤 外資法人：{fmt_chip(f_net)}\n" \
+                                f"👤 投信法人：{fmt_chip(t_net)}\n" \
+                                f"👤 自營法人：{fmt_chip(d_net)}"
+                else:
+                    chip_text = "⏳ 今日法人籌碼尚未更新或暫無資料。"
+            except Exception as e:
+                chip_text = "❌ 籌碼面資料讀取失敗。"
+
+        # ---------------- 📰 相關重大新聞 ----------------
+        news_text = "暫無相關新聞資訊。"
+        try:
+            news_list = stock.news
+            if news_list:
+                news_lines = []
+                # 僅抓取前 3 則最新新聞
+                for item in news_list[:3]:
+                    title = item.get('title', '未知標題')
+                    link = item.get('link', '#')
+                    # 縮短過長的標題避免卡片爆掉
+                    if len(title) > 28:
+                        title = title[:28] + "..."
+                    news_lines.append(f"• [{title}]({link})")
+                news_text = "\n".join(news_lines)
+        except Exception:
+            news_text = "⚠️ 無法取得即時新聞。"
+
+        # ---------------- 🎨 製作 Discord Embed 字卡 ----------------
+        embed = discord.Embed(
+            title=f"📊 {ticker} 綜合分析報告",
+            description=f"**🔥 當前狀態：** `{status_text}`",
+            color=embed_color,
+            timestamp=datetime.datetime.utcnow()
+        )
+        
+        # 欄位 1：價格與技術面
+        tech_field = f"**💵 最新收盤：** `{latest_price}`\n" \
+                     f"**🔹 5MA 均線：** `{ma5}`\n" \
+                     f"**🔸 20MA 均線：** `{ma20}`\n" \
+                     f"**⚡ 14日 RSI：** `{rsi14}`\n" \
+                     f"**📊 成交量能：** `{vol_ratio} 倍` (相較5日均量)"
+        embed.add_field(name="📈 技術面指標", value=tech_field, inline=False)
+        
+        # 欄位 2：基本面體質
+        fund_field = f"**🎯 本益比 (PE)：** `{pe_ratio} 倍`\n" \
+                     f"**💰 每股盈餘 (EPS)：** `${eps}`\n" \
+                     f"**💎 現金殖利率：** `{div_yield}`"
+        embed.add_field(name="💎 基本面數據", value=fund_field, inline=False)
+        
+        # 欄位 3：籌碼面動向
+        embed.add_field(name="👥 法人籌碼面 (張數以千計捨入)", value=chip_text, inline=False)
+        
+        # 欄位 4：最新新聞
+        embed.add_field(name="📰 最新重大消息", value=news_text, inline=False)
+        
+        embed.set_footer(text="數據僅供參考，投資請謹慎評估 • 傳送時間")
+        
+        # 發送精美字卡
+        await message.channel.send(embed=embed)
 
 # 4. 啟動機器人
 if __name__ == "__main__":
-    # 在背景先將虛擬網頁伺服器吵醒，防止 Render 因偵測不到 Port 而部署失敗
     t = threading.Thread(target=run_web_server)
     t.start()
     
-    # 🔐 安全作法：從 Render 環境變數中讀取密碼
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
     
     if DISCORD_BOT_TOKEN:
