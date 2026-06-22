@@ -3,7 +3,7 @@ import datetime
 import discord
 import yfinance as yf
 import pandas as pd
-from finmind.data import DataLoader
+from FinMind.data import DataLoader  # ✨ 終極修正：改回官方規定的大寫 FinMind
 
 # 1. 設定 intents 權限
 intents = discord.Intents.default()
