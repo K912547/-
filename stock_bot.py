@@ -5,7 +5,7 @@ from flask import Flask
 import discord
 import yfinance as yf
 import pandas as pd
-from FinMind.data import DataLoader  # 引入籌碼面專用套件
+from FinMind.data import DataLoader
 
 # ================= 網頁伺服器設定（解決 Render Web Service 部署問題） =================
 app = Flask('')
@@ -16,7 +16,8 @@ def home():
 
 def run_web_server():
     port = int(os.getenv("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    # 加上 use_reloader=False 防止在背景重複開機卡死
+    app.run(host='0.0.0.0', port=port, use_reloader=False)
 # ====================================================================================
 
 # 1. 設定 intents 權限
@@ -33,7 +34,6 @@ def get_stock_ticker(user_input):
     if user_input in STOCK_MAPPING:
         return STOCK_MAPPING[user_input]
     if user_input.isdigit():
-        # 預設四碼數字為台股上市
         return f"{user_input}.TW"
     return user_input
 
@@ -43,6 +43,7 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     print(f'✨ 機器人已經登入成功，目前身分是: {client.user} ✨')
+    print("👉 已經可以在 Discord 頻道輸入 '!查價 股票名稱' 來呼叫機器人！")
 
 @client.event
 async def on_message(message):
@@ -57,7 +58,6 @@ async def on_message(message):
         ticker = get_stock_ticker(query)
         stock = yf.Ticker(ticker)
         
-        # 抓取 3 個月的數據以利計算 20MA 與 14RSI
         data = stock.history(period="3mo")
         
         if data.empty:
@@ -68,7 +68,6 @@ async def on_message(message):
         data['5MA'] = data['Close'].rolling(window=5).mean()
         data['20MA'] = data['Close'].rolling(window=20).mean()
         
-        # 計算 14日 RSI
         delta = data['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -84,12 +83,10 @@ async def on_message(message):
         ma20 = round(data['20MA'].iloc[-1], 2)
         rsi14 = round(data['RSI'].iloc[-1], 1) if not pd.isna(data['RSI'].iloc[-1]) else "計算中"
         
-        # 量能分析 (今日成交量比前5日平均成交量)
         avg_volume = data['Volume'].rolling(window=5).mean().iloc[-2]
         current_volume = data['Volume'].iloc[-1]
         vol_ratio = round(current_volume / avg_volume, 2) if avg_volume > 0 else 1.0
         
-        # 判斷多空趨勢
         yesterday_5ma = data['5MA'].iloc[-2]
         yesterday_20ma = data['20MA'].iloc[-2]
         today_5ma = data['5MA'].iloc[-1]
@@ -99,7 +96,7 @@ async def on_message(message):
         
         if is_golden_cross:
             status_text = "🔥 發生黃金交叉！短均線突破長均線！"
-            embed_color = discord.Color.red()  # 紅色代表多頭訊號
+            embed_color = discord.Color.red()
         elif ma5 > ma20:
             status_text = "📈 短期趨勢偏多 (5MA > 20MA)"
             embed_color = discord.Color.orange()
@@ -117,13 +114,12 @@ async def on_message(message):
         except Exception:
             pe_ratio, eps, div_yield = "暫無資料", "暫無資料", "暫無資料"
 
-        # ---------------- 👥 籌碼面抓取 (三大法人 - 僅限台股) ----------------
+        # ---------------- 👥 籌碼面抓取 (三大法人) ----------------
         chip_text = "非台股標的，暫不提供三大法人籌碼。"
         if ".TW" in ticker or ".TWO" in ticker:
             try:
                 stock_id = ticker.split('.')[0]
                 fm_api = DataLoader()
-                # 抓取過去7天內的資料，確保能拿到最新的交易日
                 end_date = datetime.date.today().strftime('%Y-%m-%d')
                 start_date = (datetime.date.today() - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
                 
@@ -132,7 +128,6 @@ async def on_message(message):
                 )
                 
                 if not chip_df.empty:
-                    # 取得最新一天的籌碼日期
                     latest_chip_date = chip_df['date'].max()
                     day_chip = chip_df[chip_df['date'] == latest_chip_date]
                     
@@ -164,11 +159,9 @@ async def on_message(message):
             news_list = stock.news
             if news_list:
                 news_lines = []
-                # 僅抓取前 3 則最新新聞
                 for item in news_list[:3]:
                     title = item.get('title', '未知標題')
                     link = item.get('link', '#')
-                    # 縮短過長的標題避免卡片爆掉
                     if len(title) > 28:
                         title = title[:28] + "..."
                     news_lines.append(f"• [{title}]({link})")
@@ -184,7 +177,6 @@ async def on_message(message):
             timestamp=datetime.datetime.utcnow()
         )
         
-        # 欄位 1：價格與技術面
         tech_field = f"**💵 最新收盤：** `{latest_price}`\n" \
                      f"**🔹 5MA 均線：** `{ma5}`\n" \
                      f"**🔸 20MA 均線：** `{ma20}`\n" \
@@ -192,31 +184,27 @@ async def on_message(message):
                      f"**📊 成交量能：** `{vol_ratio} 倍` (相較5日均量)"
         embed.add_field(name="📈 技術面指標", value=tech_field, inline=False)
         
-        # 欄位 2：基本面體質
         fund_field = f"**🎯 本益比 (PE)：** `{pe_ratio} 倍`\n" \
                      f"**💰 每股盈餘 (EPS)：** `${eps}`\n" \
                      f"**💎 現金殖利率：** `{div_yield}`"
         embed.add_field(name="💎 基本面數據", value=fund_field, inline=False)
         
-        # 欄位 3：籌碼面動向
         embed.add_field(name="👥 法人籌碼面 (張數以千計捨入)", value=chip_text, inline=False)
-        
-        # 欄位 4：最新新聞
         embed.add_field(name="📰 最新重大消息", value=news_text, inline=False)
+        embed.set_footer(text="數據僅供參考，投資請謹慎評估")
         
-        embed.set_footer(text="數據僅供參考，投資請謹慎評估 • 傳送時間")
-        
-        # 發送精美字卡
         await message.channel.send(embed=embed)
 
 # 4. 啟動機器人
 if __name__ == "__main__":
-    t = threading.Thread(target=run_web_server)
+    # 💡 關鍵修正：將 daemon 設為 True，讓網頁在完全不干擾主程式的狀態下獨立在背景跑
+    t = threading.Thread(target=run_web_server, daemon=True)
     t.start()
     
     DISCORD_BOT_TOKEN = os.getenv('DISCORD_BOT_TOKEN')
     
     if DISCORD_BOT_TOKEN:
+        print("🤖 正在連線至 Discord 伺服器...")
         client.run(DISCORD_BOT_TOKEN)
     else:
         print("❌ 錯誤：找不到 DISCORD_BOT_TOKEN 環境變數，請檢查 Render 後台設定！")
